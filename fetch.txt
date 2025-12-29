@@ -1,0 +1,106 @@
+// Bootstrap
+var __global = System.getContext() || (function () { return this; }).call(null);
+var VROES = __global.__VROES ||
+    (__global.__VROES = System.getModule("com.vmware.pscoe.library.ecmascript").VROES());
+
+var AuthClientService_1 =
+    VROES.importLazy("com.vmware.pscoe.library.ts.vra.authentication/actions/AuthClientService");
+var ResourceUtil_1 = VROES.importLazy("com.vmware.pscoe.sbi.common.actions/firewall/services/ResourceUtil");
+var ResourceElementAccessor_1 = VROES.importLazy("com.vmware.pscoe.library.ts.util/ResourceElementAccessor");
+var NsxTConnector_1 = VROES.importLazy("com.vmware.pscoe.sbi.common.actions/NSXToNSX/connector/NsxTConnector");
+var userName = System.getContext().getParameter("__metadata_userName");
+var dateInfotest = new Date();
+dateInfotest.setMinutes(dateInfotest.getMinutes() + 330);
+var dateInfo = dateInfotest.toISOString().replace("T", " ").split(".")[0];
+
+var Logger_1 =
+    VROES.importLazy("com.vmware.pscoe.library.ts.logging/Logger");
+
+var logger = Logger_1._.Logger.getLogger("Fetch Onboarded VMs (Paginated)");
+
+// Authenticated vRA client
+var vraClient = AuthClientService_1._.default.withDefaultAuthentication();
+
+// Pagination settings
+var pageSize = 1000;
+var page = 0;
+var totalFetched = 0;
+var totalElements = 0;
+
+do {
+    var request = {
+        path:
+            "/deployment/api/resources" +
+            "?page=" + page +
+            "&size=" + pageSize +
+            "&resourceTypes=Cloud.Machine,Cloud.vSphere.Machine" +
+            "&origin=ONBOARDED" +
+            "&apiVersion=2020-08-25"
+    };
+
+    var response = vraClient.get(request);
+
+    if (!response || !response.content || response.content.length === 0) {
+        break;
+    }
+
+    // Capture total count once
+    if (page === 0 && response.totalElements) {
+        totalElements = response.totalElements;
+        System.log("Total onboarded VMs (reported by API): " + totalElements);
+    }
+
+    var projectCache = {};
+    var vmRows = [];
+
+    // Process page
+    for (var i = 0; i < response.content.length; i++) {
+        var vm = response.content[i];
+
+        // Safe access helpers
+        var properties = vm.properties || {};
+
+        var hostname = properties.hostName || vm.name || "N/A";
+
+        // Prefer primary address, fallback to network interface
+        var ipAddress = properties.address ||
+            (properties.networks &&
+                properties.networks.length > 0 &&
+                properties.networks[0].address) ||
+            "N/A";
+
+        var projectId = vm.projectId || "N/A";
+        var powerState = properties.powerState || "UNKNOWN";
+        vmRows.push({
+            vmName: vm.name,
+            hostName: hostname,
+            ipAddress: ipAddress,
+            projectId: projectId,
+            powerState: powerState
+        });
+
+        System.log("---- VM DETAILS ----");
+        System.log("VM Name     : " + vm.name);
+        System.log("Hostname    : " + hostname);
+        System.log("IP Address  : " + ipAddress);
+        System.log("Project ID  : " + projectId);
+        System.log("Power State : " + powerState);
+        System.log("--------------------");
+
+        totalFetched++;
+    }
+
+    var onboardedVmPath = "SBI Meghdoot/Reports/onBoardedVMs/" + dateInfo + ".csv";
+    var onboardedVmPathRE = new ResourceElementAccessor_1._.ResourceElementAccessor(onboardedVmPath, false);
+
+    System.log("Convert JSOn to CSV : ");
+    var connector = new NsxTConnector_1._.NsxTConnector();
+    var csvData01 = connector.convertToCSV(vmRows, { delimiter: ",", newLine: "\n" });
+
+    onboardedVmPathRE.setContent(csvData01);
+
+    page++;
+
+} while (totalFetched < totalElements);
+
+System.log("Total onboarded VMs fetched: " + totalFetched);
